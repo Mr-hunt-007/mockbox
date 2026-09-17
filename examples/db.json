@@ -1,0 +1,64 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "name": "Ada Lovelace",
+      "email": "ada@example.com",
+      "role": "admin",
+      "age": 36,
+      "address": {
+        "city": "London"
+      }
+    },
+    {
+      "id": 2,
+      "name": "Alan Turing",
+      "email": "alan@example.com",
+      "role": "user",
+      "age": 41,
+      "address": {
+        "city": "Wilmslow"
+      }
+    },
+    {
+      "id": 3,
+      "name": "Grace Hopper",
+      "email": "grace@example.com",
+      "role": "admin",
+      "age": 85,
+      "address": {
+        "city": "Arlington"
+      }
+    }
+  ],
+  "posts": [
+    {
+      "id": 1,
+      "title": "Notes on the Analytical Engine",
+      "userId": 1,
+      "published": "1843-09-01"
+    },
+    {
+      "id": 2,
+      "title": "Computing Machinery and Intelligence",
+      "userId": 2,
+      "published": "1950-10-01"
+    },
+    {
+      "id": 3,
+      "title": "The Education of a Computer",
+      "userId": 3,
+      "published": "1952-05-02"
+    },
+    {
+      "id": 4,
+      "title": "Sketch of the Analytical Engine",
+      "userId": 1,
+      "published": "1842-10-15"
+    }
+  ],
+  "profile": {
+    "name": "demo",
+    "theme": "dark"
+  }
+}

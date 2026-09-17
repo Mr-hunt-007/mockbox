@@ -1,0 +1,6 @@
+/mockbox
+/mockbox.exe
+/dist/
+*.test
+*.out
+.DS_Store
