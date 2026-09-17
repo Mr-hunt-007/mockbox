@@ -59,7 +59,7 @@ top-level arrays become collections and top-level objects become singular resour
 
 ```
 $ mockbox db.json
-mockbox 0.1.0 serving db.json (database, in memory, file is never modified)
+mockbox 0.2.0 serving db.json (database, in memory, file is never modified)
 
   GET    /users
   GET    /users/:id
@@ -162,7 +162,7 @@ If the file has a top-level `openapi` key, mockbox serves the spec instead:
 
 ```
 $ mockbox openapi.json --port 3003
-mockbox 0.1.0 serving openapi.json (openapi, static responses from the spec)
+mockbox 0.2.0 serving openapi.json (openapi, static responses from the spec)
 
   GET    /orders
   POST   /orders
@@ -252,6 +252,128 @@ mockbox: reload failed, still serving the last good data: db.json: unexpected en
 reloaded db.json
 ```
 
+## Use with AI agents
+
+The CLI is already agent-friendly: `--json` gives one JSON object per line, and the exit codes below are stable.
+
+For coding agents that speak the Model Context Protocol, `mockbox --mcp` runs an MCP server on stdin and stdout. It lets an agent list the routes a mock file serves and see exactly what status, headers and body a frontend request would get, without starting anything.
+
+**`mockbox --mcp` does not replace running the server.** It never opens a port, so your browser, app or `curl` cannot reach it. Keep running `mockbox db.json` in a terminal for that; the MCP server is only a way for the agent to inspect the same file.
+
+`mockbox --mcp db.json` makes `db.json` the default file for every tool; plain `mockbox --mcp` makes the agent pass a `file` on each call. Relative paths resolve against the directory the client starts the server in. Server flags such as `--port` or `--watch` are ignored with `--mcp`, and `--persist` is rejected.
+
+### Setup
+
+The command must be on the `PATH` the client sees. GUI apps often do not inherit your shell's `PATH`, so if the server fails to start, use the absolute path of the binary instead, for example the output of `echo $(go env GOPATH)/bin/mockbox`.
+
+Claude Code:
+
+```
+claude mcp add mockbox -- mockbox --mcp
+```
+
+Add `--scope user` before the name (`claude mcp add --scope user mockbox -- mockbox --mcp`) to enable it in every project.
+
+Codex CLI:
+
+```
+codex mcp add mockbox -- mockbox --mcp
+```
+
+or in `~/.codex/config.toml`:
+
+```toml
+[mcp_servers.mockbox]
+command = "mockbox"
+args = ["--mcp"]
+```
+
+Cursor, in `.cursor/mcp.json` (or `~/.cursor/mcp.json` for every project):
+
+```json
+{
+  "mcpServers": {
+    "mockbox": { "command": "mockbox", "args": ["--mcp"] }
+  }
+}
+```
+
+VS Code, in `.vscode/mcp.json`:
+
+```json
+{
+  "servers": {
+    "mockbox": { "type": "stdio", "command": "mockbox", "args": ["--mcp"] }
+  }
+}
+```
+
+Gemini CLI, in `~/.gemini/settings.json`:
+
+```json
+{
+  "mcpServers": {
+    "mockbox": { "command": "mockbox", "args": ["--mcp"] }
+  }
+}
+```
+
+To pin a file for a project, add it to the arguments: `"args": ["--mcp", "db.json"]`.
+
+### Tools
+
+| Tool | Safety | What it answers |
+| --- | --- | --- |
+| `mockbox_routes` | read-only | Which routes the file serves (database or OpenAPI mode), with collections and item counts, singular resources, detected relations (for `/users/:id/posts`, `_embed`, `_expand`), rewrites and skipped keys. |
+| `mockbox_request` | read-only | What one request returns: status, headers and body. Arguments: `method`, `path` with query, optional JSON `body`, `headers` and `routes` file. It runs on a fresh in-memory copy, so a `POST` or `DELETE` shows its response but is not kept, and the file is never modified. |
+| `mockbox_example` | read-only | For an OpenAPI spec: the body served for one operation and status, whether it came from `example`, a named `examples` entry or the schema, and which responses and examples exist. |
+
+Every tool reads the file fresh on each call and goes through the same code as the HTTP server. Large outputs are capped (`max_body_bytes`, default 20000; `max_routes`, default 200) and the result says when something was cut. There are no destructive tools, so `--allow-destructive` is accepted with `--mcp` but changes nothing.
+
+A real `mockbox_request` result for `GET /posts?userId=1&_page=1&_limit=1`:
+
+```json
+{
+  "file": "db.json",
+  "mode": "database",
+  "method": "GET",
+  "path": "/posts?userId=1&_page=1&_limit=1",
+  "status": 200,
+  "headers": {
+    "Content-Type": "application/json; charset=utf-8",
+    "Link": "<http://127.0.0.1:3000/posts?_limit=1&_page=1&userId=1>; rel=\"first\", <http://127.0.0.1:3000/posts?_limit=1&_page=2&userId=1>; rel=\"next\", <http://127.0.0.1:3000/posts?_limit=1&_page=2&userId=1>; rel=\"last\"",
+    "X-Total-Count": "2"
+  },
+  "body": [
+    {
+      "id": 1,
+      "title": "Notes on the Analytical Engine",
+      "userId": 1,
+      "published": "1843-09-01"
+    }
+  ],
+  "body_bytes": 119
+}
+```
+
+Headers are the ones mockbox sets; the running server also adds `Date` and `Content-Length`. `Link` headers use `127.0.0.1:3000`, the default address.
+
+### Skill and agent instructions
+
+`skills/mockbox/SKILL.md` teaches an agent when and how to use mockbox. Install it for Claude Code with:
+
+```
+mkdir -p ~/.claude/skills && cp -r skills/mockbox ~/.claude/skills/
+```
+
+and for Codex with:
+
+```
+mkdir -p ~/.agents/skills && cp -r skills/mockbox ~/.agents/skills/
+```
+
+Agents working on this repository should read [`AGENTS.md`](AGENTS.md).
+
 ## Flags
 
 | Flag | Default | Description |
@@ -267,6 +389,8 @@ reloaded db.json
 | `--quiet` | off | no route table, request log or reload messages. Warnings and errors still go to stderr |
 | `--json` | off | startup info, request log and reload events as JSON lines |
 | `--no-color` | off | no ANSI colour. Colour is also off when `NO_COLOR` is set or stdout is not a terminal |
+| `--mcp` | off | run an MCP server on stdin and stdout instead of the HTTP server, see [Use with AI agents](#use-with-ai-agents). The file argument becomes optional |
+| `--allow-destructive` | off | only valid with `--mcp`. mockbox has no destructive MCP tools, so it changes nothing |
 | `--version` | | print the version |
 | `-h`, `--help` | | usage with examples |
 
@@ -283,7 +407,7 @@ Errors from the API always look like this:
 With `--json`, stdout gets one JSON object per line, each with an `event` field:
 
 ```
-{"event":"start","version":"0.1.0","file":"db.json","mode":"database","url":"http://127.0.0.1:3005","readonly":true,"persist":false,"routes":[{"method":"GET","path":"/users"},{"method":"GET","path":"/users/:id"},{"method":"GET","path":"/users/:id/posts"},{"method":"GET","path":"/posts"},{"method":"GET","path":"/posts/:id"},{"method":"GET","path":"/profile"}],"rewrites":[]}
+{"event":"start","version":"0.2.0","file":"db.json","mode":"database","url":"http://127.0.0.1:3005","readonly":true,"persist":false,"routes":[{"method":"GET","path":"/users"},{"method":"GET","path":"/users/:id"},{"method":"GET","path":"/users/:id/posts"},{"method":"GET","path":"/posts"},{"method":"GET","path":"/posts/:id"},{"method":"GET","path":"/profile"}],"rewrites":[]}
 {"event":"request","time":"2026-09-17T15:54:46.311057Z","method":"POST","path":"/users","status":405,"duration_ms":0.043}
 {"event":"request","time":"2026-09-17T15:54:46.325309Z","method":"GET","path":"/users/2","status":200,"duration_ms":0.229}
 ```
@@ -299,10 +423,10 @@ With `--json`, stdout gets one JSON object per line, each with an `event` field:
 
 | Code | Meaning |
 | --- | --- |
-| 0 | clean shutdown (Ctrl-C or SIGTERM), `--help`, `--version` |
+| 0 | clean shutdown (Ctrl-C or SIGTERM), `--help`, `--version`, or the MCP client closed stdin (`--mcp`) |
 | 1 | the server could not start, for example the port is in use |
 | 2 | invalid flags or arguments |
-| 3 | the input file cannot be read or is invalid (bad JSON, YAML given, bad routes file) |
+| 3 | the input file cannot be read or is invalid (bad JSON, YAML given, bad routes file). With `--mcp`, only a missing default file or routes file fails at startup; other problems come back as tool errors |
 
 ```
 $ mockbox db.json --port 3004
@@ -322,6 +446,7 @@ On Ctrl-C mockbox stops accepting connections and lets in-flight requests finish
 - **OpenAPI mode is stateless.** `POST` does not create anything, request bodies are only checked for JSON syntax (not against the schema), and parameters, headers and security schemes are not validated. External `$ref`s (other files or URLs) are not followed and return a 500 that names the ref. Only `servers[0]` is used for the base path alias. YAML is not supported.
 - **Not a json-server clone.** There is no `_start`/`_end`, `_gt`/`_lt`, `_per_page`, `/db` route or static file serving.
 - The `Link` header always uses `http://` and the request's `Host` header.
+- **`--mcp` only inspects.** MCP tools answer from an in-memory copy of the file; they cannot serve your frontend, and changes made through `mockbox_request` are gone after each call.
 - Request bodies are limited to 10 MB. There is no TLS and no authentication; it is a development tool, which is why it binds to `127.0.0.1` by default.
 
 ## License

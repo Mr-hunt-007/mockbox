@@ -565,3 +565,46 @@ func TestReloadFile(t *testing.T) {
 		t.Fatalf("broken edit replaced good data: %s", r.body)
 	}
 }
+
+func TestResourcesAndRelations(t *testing.T) {
+	doc, err := jsonx.Parse([]byte(`{
+	  "users": [{"id": 1}],
+	  "categories": [{"id": "a"}],
+	  "posts": [{"id": 1, "userId": 1, "categoryId": "a"}],
+	  "comments": [{"id": 1, "postId": 1}, {"id": 2}],
+	  "tags": [],
+	  "profile": {"name": "x"},
+	  "version": 3
+	}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	obj, _, err := Parse(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := New("", obj, false)
+	colls, singular := d.Resources()
+	if got := fmt.Sprint(colls, singular); got != "[{users 1} {categories 1} {posts 1} {comments 2} {tags 0}] [profile]" {
+		t.Fatalf("resources: %s", got)
+	}
+	var got []string
+	for _, r := range d.Relations() {
+		got = append(got, r.Parent+">"+r.Child+":"+r.ForeignKey+":"+r.Expand)
+	}
+	want := "users>posts:userId:user categories>posts:categoryId:category posts>comments:postId:post"
+	if strings.Join(got, " ") != want {
+		t.Fatalf("relations:\n got %s\nwant %s", strings.Join(got, " "), want)
+	}
+	// Every relation the tool reports must actually work on the server.
+	srv := httptest.NewServer(d)
+	defer srv.Close()
+	for _, r := range d.Relations() {
+		for _, path := range []string{"/" + r.Parent + "?_embed=" + r.Child, "/" + r.Child + "?_expand=" + r.Expand} {
+			res := do(t, srv, "GET", path, "")
+			if res.status != 200 {
+				t.Errorf("%s: %d %s", path, res.status, res.body)
+			}
+		}
+	}
+}

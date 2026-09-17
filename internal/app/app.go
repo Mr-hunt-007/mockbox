@@ -122,6 +122,50 @@ func New(cfg *Config, stdout, stderr io.Writer, color bool) (*App, error) {
 	return a, nil
 }
 
+// Open loads file (and an optional routes file) for in-memory use, the way
+// the MCP tools need it: nothing is printed, nothing is watched, and changes
+// made through Handler never reach the file. Warnings about top-level keys
+// that cannot be served are returned instead of printed.
+func Open(file, routes string) (*App, []string, error) {
+	var warn bytes.Buffer
+	a, err := New(&Config{File: file, Routes: routes, Host: "127.0.0.1", Port: 3000, Quiet: true}, io.Discard, &warn, false)
+	if err != nil {
+		return nil, nil, err
+	}
+	var warnings []string
+	for _, line := range strings.Split(strings.TrimSpace(warn.String()), "\n") {
+		if line = strings.TrimPrefix(line, "mockbox: warning: "); line != "" {
+			warnings = append(warnings, line)
+		}
+	}
+	return a, warnings, nil
+}
+
+// Mode is "database" or "openapi".
+func (a *App) Mode() string { return a.current().mode() }
+
+// Routes is the route table as the server prints it at startup.
+func (a *App) Routes() []Route { return a.current().routes(a.cfg.Readonly) }
+
+// Rewrites returns the --routes rules in file order.
+func (a *App) Rewrites() []rewrite.Rule { return a.rules }
+
+// DB returns the database, or nil in OpenAPI mode.
+func (a *App) DB() *db.DB {
+	if b, ok := a.current().(*dbBackend); ok {
+		return b.d
+	}
+	return nil
+}
+
+// Spec returns the OpenAPI spec, or nil in database mode.
+func (a *App) Spec() *openapi.Spec {
+	if b, ok := a.current().(*specBackend); ok {
+		return b.s
+	}
+	return nil
+}
+
 const yamlHelp = `%[1]s: YAML is not supported (mockbox uses only the Go standard library, which has no YAML parser).
 Convert the spec to JSON first, for example:
   yq -o=json %[1]s > %[2]s

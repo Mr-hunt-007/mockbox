@@ -1,6 +1,7 @@
 package openapi
 
 import (
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -330,5 +331,50 @@ func TestPickResponse(t *testing.T) {
 	}
 	if statusFor("2XX") != 200 || statusFor("default") != 200 || statusFor("418") != 418 {
 		t.Error("statusFor wrong")
+	}
+}
+
+func TestRenderReportsSource(t *testing.T) {
+	spec, err := Load(mustParse(t, `{"openapi": "3.0.3", "paths": {
+	  "/a": {"get": {"responses": {
+	    "200": {"description": "", "content": {"application/json": {"schema": {"type": "object", "properties": {"n": {"type": "integer"}}}}}},
+	    "404": {"description": "", "content": {"application/json": {"examples": {"one": {"value": 1}, "two": {"value": 2}}}}},
+	    "409": {"description": "", "content": {"application/json": {"example": {"e": true}}}},
+	    "default": {"description": ""}
+	  }}},
+	  "/b": {"delete": {"responses": {}}}
+	}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	a, _ := spec.Find("GET", "/a")
+	tests := []struct {
+		prefer, want string
+	}{
+		{"", `200 200 schema application/json; charset=utf-8 [] { "n": 0 }`},
+		{"code=404", `404 404 examples/one application/json; charset=utf-8 [one two] 1`},
+		{"code=404, example=two", `404 404 examples/two application/json; charset=utf-8 [one two] 2`},
+		{"code=409", `409 409 example application/json; charset=utf-8 [] { "e": true }`},
+		{"code=default", `200 default none  [] `},
+	}
+	for _, tt := range tests {
+		r, err := spec.Render(a, tt.prefer)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.prefer, err)
+		}
+		got := fmt.Sprintf("%d %s %s %s %v %s", r.Status, r.Response, r.Source, r.ContentType, r.Examples, strings.Join(strings.Fields(string(r.Body)), " "))
+		if got != tt.want {
+			t.Errorf("%q:\n got %s\nwant %s", tt.prefer, got, tt.want)
+		}
+		if strings.Join(r.Responses, ",") != "200,404,409,default" {
+			t.Errorf("responses %v", r.Responses)
+		}
+	}
+	if _, err := spec.Render(a, "code=500"); err == nil || !strings.Contains(err.Error(), "only defines responses 200, 404, 409, default") {
+		t.Errorf("code=500: %v", err)
+	}
+	b, _ := spec.Find("DELETE", "/b")
+	if r, err := spec.Render(b, ""); err != nil || r.Status != 204 || r.Source != "none" || r.Body != nil {
+		t.Errorf("empty responses: %+v %v", r, err)
 	}
 }

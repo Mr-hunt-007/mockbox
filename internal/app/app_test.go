@@ -117,6 +117,13 @@ func TestParseArgs(t *testing.T) {
 		{[]string{"db.json", "--nope"}, "not defined", nil},
 		{[]string{"db.json", "--persist", "--readonly"}, "cannot be used together", nil},
 		{[]string{"db.json", "--host", ""}, "--host must not be empty", nil},
+		{[]string{"--mcp"}, "", func(c *Config) bool { return c.MCP && c.File == "" && !c.AllowDestructive }},
+		{[]string{"--mcp", "db.json", "--routes", "r.json", "--allow-destructive", "--port", "70000"}, "", func(c *Config) bool {
+			return c.MCP && c.File == "db.json" && c.Routes == "r.json" && c.AllowDestructive
+		}},
+		{[]string{"--mcp", "a.json", "b.json"}, "at most one file argument", nil},
+		{[]string{"--mcp", "--persist"}, "--persist cannot be used with --mcp", nil},
+		{[]string{"db.json", "--allow-destructive"}, "only applies to --mcp", nil},
 	}
 	for _, tt := range tests {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
@@ -576,11 +583,13 @@ func TestRunExitCodes(t *testing.T) {
 		{[]string{yaml}, ExitInput, "", "YAML is not supported"},
 		{[]string{filepath.Join(dir, "nope.json")}, ExitInput, "", "cannot read"},
 		{[]string{good, "--port", busy, "--quiet"}, ExitRuntime, "", "is already in use"},
+		{[]string{"--mcp", filepath.Join(dir, "nope.json")}, ExitInput, "", "cannot read"},
+		{[]string{"--mcp"}, ExitRuntime, "", "not available"},
 	}
 	for _, tt := range tests {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
 			var out, errOut bytes.Buffer
-			code := Run(tt.args, &out, &errOut)
+			code := Run(tt.args, strings.NewReader(""), &out, &errOut, nil)
 			if code != tt.code {
 				t.Fatalf("exit %d want %d (stderr %s)", code, tt.code, errOut.String())
 			}
@@ -588,6 +597,49 @@ func TestRunExitCodes(t *testing.T) {
 				t.Fatalf("stdout %q stderr %q", out.String(), errOut.String())
 			}
 		})
+	}
+}
+
+func TestRunMCPUsesServerAndEndsOnEOF(t *testing.T) {
+	dir := t.TempDir()
+	good := writeFile(t, dir, "db.json", sampleDB)
+	var got *Config
+	serve := func(ctx context.Context, cfg *Config, stdin io.Reader, stdout io.Writer) error {
+		got = cfg
+		b, _ := io.ReadAll(stdin)
+		_, err := stdout.Write(b)
+		return err
+	}
+	var out, errOut bytes.Buffer
+	if code := Run([]string{"--mcp", good, "--json"}, strings.NewReader("ping\n"), &out, &errOut, serve); code != ExitOK {
+		t.Fatalf("exit %d: %s", code, errOut.String())
+	}
+	if got == nil || got.File != good || out.String() != "ping\n" || errOut.Len() != 0 {
+		t.Fatalf("cfg %+v stdout %q stderr %q", got, out.String(), errOut.String())
+	}
+}
+
+func TestOpenCollectsWarningsAndNeverWrites(t *testing.T) {
+	dir := t.TempDir()
+	file := writeFile(t, dir, "db.json", `{"users": [{"id": 1}], "version": 3}`)
+	a, warnings, err := Open(file, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], `skipping key "version"`) {
+		t.Fatalf("warnings %q", warnings)
+	}
+	if a.Mode() != "database" || a.DB() == nil || a.Spec() != nil || len(a.Routes()) != 6 {
+		t.Fatalf("mode %s routes %v", a.Mode(), a.Routes())
+	}
+	rec := httptest.NewRecorder()
+	a.Handler().ServeHTTP(rec, httptest.NewRequest("DELETE", "/users/1", nil))
+	if rec.Code != 200 {
+		t.Fatalf("delete: %d", rec.Code)
+	}
+	b, _ := os.ReadFile(file)
+	if string(b) != `{"users": [{"id": 1}], "version": 3}` {
+		t.Fatalf("file changed: %s", b)
 	}
 }
 

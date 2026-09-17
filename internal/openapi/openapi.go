@@ -290,35 +290,57 @@ func (s *Spec) deref(v any) (*jsonx.Object, error) {
 	return nil, errors.New("$ref chain too long")
 }
 
+// Rendered is a chosen response and its body.
+type Rendered struct {
+	Status      int      // HTTP status
+	Response    string   // the responses key that was used, e.g. "200" or "default"
+	Responses   []string // every responses key the operation defines, in spec order
+	ContentType string   // "" when the response has no content
+	Examples    []string // names under the media type's examples, in spec order
+	// Source says where the body came from: "example", "examples/<name>",
+	// "schema" (synthesized) or "none" (no body).
+	Source string
+	Body   []byte
+}
+
 // Respond picks a response for op and renders its body.
 func (s *Spec) Respond(op *Operation, prefer string) (int, string, []byte, error) {
+	r, err := s.Render(op, prefer)
+	return r.Status, r.ContentType, r.Body, err
+}
+
+// Render picks a response for op, honouring a Prefer header value
+// ("code=404, example=name"), and renders its body.
+func (s *Spec) Render(op *Operation, prefer string) (Rendered, error) {
 	responses, _ := mustGet(op.op, "responses").(*jsonx.Object)
 	if responses == nil || responses.Len() == 0 {
-		return http.StatusNoContent, "", nil, nil
+		return Rendered{Status: http.StatusNoContent, Source: "none"}, nil
 	}
+	out := Rendered{Responses: responses.Keys(), Source: "none"}
 	wantCode, wantExample := parsePrefer(prefer)
 	key := ""
 	if wantCode != "" {
 		if _, ok := responses.Get(wantCode); ok {
 			key = wantCode
 		} else {
-			return 0, "", nil, httpx.Errorf(http.StatusBadRequest, "Prefer: code=%s, but %s %s only defines responses %s", wantCode, op.Method, op.Path, strings.Join(responses.Keys(), ", "))
+			return Rendered{}, httpx.Errorf(http.StatusBadRequest, "Prefer: code=%s, but %s %s only defines responses %s", wantCode, op.Method, op.Path, strings.Join(responses.Keys(), ", "))
 		}
 	}
 	if key == "" {
 		key = pickResponse(responses.Keys())
 	}
-	status := statusFor(key)
+	out.Response = key
+	out.Status = statusFor(key)
 	resp, err := s.deref(mustGet(responses, key))
 	if err != nil {
-		return 0, "", nil, err
+		return Rendered{}, err
 	}
 	if resp == nil {
-		return status, "", nil, nil
+		return out, nil
 	}
 	content, _ := mustGet(resp, "content").(*jsonx.Object)
 	if content == nil || content.Len() == 0 {
-		return status, "", nil, nil
+		return out, nil
 	}
 	ctype := pickMediaType(content.Keys())
 	media, _ := mustGet(content, ctype).(*jsonx.Object)
@@ -327,59 +349,69 @@ func (s *Spec) Respond(op *Operation, prefer string) (int, string, []byte, error
 		outType = "application/json"
 	}
 	isJSON := strings.Contains(outType, "json")
+	out.ContentType = outType
 	if media == nil {
-		return status, outType, nil, nil
+		return out, nil
+	}
+	if exs, ok := mustGet(media, "examples").(*jsonx.Object); ok {
+		out.Examples = exs.Keys()
 	}
 
-	value, found, err := s.exampleFor(media, wantExample)
+	value, source, err := s.exampleFor(media, wantExample)
 	if err != nil {
-		return 0, "", nil, err
+		return Rendered{}, err
 	}
-	if !found {
+	if source == "" {
 		schema, hasSchema := media.Get("schema")
 		if !hasSchema {
-			return status, outType, nil, nil
+			return out, nil
 		}
 		value, err = NewSynthesizer(s.root).Value(schema)
 		if err != nil {
-			return 0, "", nil, httpx.Errorf(http.StatusInternalServerError, "%s %s: %v", op.Method, op.Path, err)
+			return Rendered{}, httpx.Errorf(http.StatusInternalServerError, "%s %s: %v", op.Method, op.Path, err)
 		}
+		source = "schema"
 	}
+	out.Source = source
 	if str, ok := value.(string); ok && !isJSON {
-		return status, outType, []byte(str), nil
+		out.Body = []byte(str)
+		return out, nil
 	}
 	if isJSON && !strings.Contains(outType, "charset") {
-		outType += "; charset=utf-8"
+		out.ContentType += "; charset=utf-8"
 	}
-	return status, outType, append(jsonx.Marshal(value, "  "), '\n'), nil
+	out.Body = append(jsonx.Marshal(value, "  "), '\n')
+	return out, nil
 }
 
-func (s *Spec) exampleFor(media *jsonx.Object, name string) (any, bool, error) {
+// exampleFor returns the example value and where it came from ("" when the
+// media type has no usable example).
+func (s *Spec) exampleFor(media *jsonx.Object, name string) (any, string, error) {
 	if exs, ok := mustGet(media, "examples").(*jsonx.Object); ok && exs.Len() > 0 {
 		keys := exs.Keys()
 		if name != "" {
 			if _, ok := exs.Get(name); !ok {
-				return nil, false, httpx.Errorf(http.StatusBadRequest, "Prefer: example=%s, but the available examples are %s", name, strings.Join(keys, ", "))
+				return nil, "", httpx.Errorf(http.StatusBadRequest, "Prefer: example=%s, but the available examples are %s", name, strings.Join(keys, ", "))
 			}
 			keys = []string{name}
 		}
 		for _, k := range keys {
 			ex, err := s.deref(mustGet(exs, k))
 			if err != nil {
-				return nil, false, err
+				return nil, "", err
 			}
 			if ex == nil {
 				continue
 			}
 			if v, ok := ex.Get("value"); ok {
-				return v, true, nil
+				return v, "examples/" + k, nil
 			}
 		}
 	}
 	if v, ok := media.Get("example"); ok {
-		return v, true, nil
+		return v, "example", nil
 	}
-	return nil, false, nil
+	return nil, "", nil
 }
 
 // pickResponse prefers the lowest 2xx code, then 2XX, then default, then the first key.

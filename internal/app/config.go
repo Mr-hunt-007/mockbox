@@ -9,7 +9,7 @@ import (
 )
 
 // Version is the mockbox release.
-const Version = "0.1.0"
+const Version = "0.2.0"
 
 // Exit codes.
 const (
@@ -35,6 +35,9 @@ type Config struct {
 	NoColor  bool
 	Version  bool
 	Help     bool
+	// MCP starts a Model Context Protocol server on stdio instead of HTTP.
+	MCP              bool
+	AllowDestructive bool
 }
 
 const usageText = `mockbox: turn a JSON file into a working REST API.
@@ -59,6 +62,13 @@ Flags:
   --quiet           do not print the route table or request log
   --json            print the startup info and request log as JSON lines
   --no-color        disable colour (also honours NO_COLOR)
+  --mcp             run an MCP server on stdin/stdout for AI agents instead of
+                    the HTTP server. The file argument is optional and becomes
+                    the default file for its tools; server flags are ignored.
+                    It never listens on a port and never writes to the file
+  --allow-destructive
+                    accepted with --mcp; mockbox has no destructive MCP tools,
+                    so it changes nothing
   --version         print the version and exit
   -h, --help        show this help
 
@@ -73,9 +83,10 @@ Examples:
   mockbox db.json --persist --delay 300
   mockbox db.json --routes routes.json --readonly
   mockbox openapi.json --port 8080
+  mockbox --mcp db.json
 
 Exit codes:
-  0  clean shutdown (Ctrl-C), --help, --version
+  0  clean shutdown (Ctrl-C), --help, --version, --mcp client disconnected
   1  server could not start (port in use, cannot bind)
   2  invalid flags or arguments
   3  input file unreadable or invalid (JSON error, YAML given, bad routes file)
@@ -100,6 +111,8 @@ func ParseArgs(args []string, stderr io.Writer) (*Config, error) {
 	fs.BoolVar(&cfg.Quiet, "quiet", false, "")
 	fs.BoolVar(&cfg.JSON, "json", false, "")
 	fs.BoolVar(&cfg.NoColor, "no-color", false, "")
+	fs.BoolVar(&cfg.MCP, "mcp", false, "")
+	fs.BoolVar(&cfg.AllowDestructive, "allow-destructive", false, "")
 	fs.BoolVar(&cfg.Version, "version", false, "")
 	fs.BoolVar(&cfg.Help, "help", false, "")
 	fs.BoolVar(&cfg.Help, "h", false, "")
@@ -124,6 +137,21 @@ func ParseArgs(args []string, stderr io.Writer) (*Config, error) {
 		return cfg, errHelp
 	}
 	if cfg.Version {
+		return cfg, nil
+	}
+	if cfg.AllowDestructive && !cfg.MCP {
+		return nil, errors.New("--allow-destructive only applies to --mcp")
+	}
+	if cfg.MCP {
+		if len(positional) > 1 {
+			return nil, fmt.Errorf("expected at most one file argument with --mcp, got %d: %s", len(positional), strings.Join(positional, " "))
+		}
+		if cfg.Persist {
+			return nil, errors.New("--persist cannot be used with --mcp: MCP tools never write to the file")
+		}
+		if len(positional) == 1 {
+			cfg.File = positional[0]
+		}
 		return cfg, nil
 	}
 	switch len(positional) {

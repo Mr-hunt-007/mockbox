@@ -1,0 +1,15 @@
+# mockbox
+
+> A single Go binary that serves a JSON file or an OpenAPI 3 JSON spec as a working REST API, with an MCP server for AI agents.
+
+Top-level arrays in db.json become collections with GET, POST, PUT, PATCH and DELETE; objects become singular resources. Collections support filters, full text search, sorting, pagination with X-Total-Count and Link headers, _embed and _expand. OpenAPI specs are served from examples or synthesized from schemas.
+
+Changes stay in memory unless --persist is given. The server binds to 127.0.0.1:3000 by default. --json prints startup, request and reload events as JSON lines, and exit codes are documented.
+
+`mockbox --mcp` runs a read-only MCP server with mockbox_routes, mockbox_request and mockbox_example. It never opens a port, so it does not replace running `mockbox db.json` for a frontend.
+
+## Docs
+
+- [README](https://github.com/Mr-hunt-007/mockbox/blob/main/README.md): install, usage, flags, JSON shapes, exit codes, limitations, agent setup
+- [AGENTS.md](https://github.com/Mr-hunt-007/mockbox/blob/main/AGENTS.md): layout, build and test commands, contributor rules
+- [SKILL.md](https://github.com/Mr-hunt-007/mockbox/blob/main/skills/mockbox/SKILL.md): Agent Skill for using mockbox

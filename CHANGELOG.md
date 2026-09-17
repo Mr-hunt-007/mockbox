@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.0 (2026-09-17)
+
+- `--mcp` runs an MCP server on stdio for AI coding agents, with three read-only tools: `mockbox_routes` (routes, collections, singular resources, relations), `mockbox_request` (status, headers and body of one request against a fresh in-memory copy; the file is never modified) and `mockbox_example` (the example or synthesized body for an OpenAPI operation and where it came from). An optional file argument sets the default file. `--allow-destructive` is accepted and changes nothing, since no tool is destructive.
+- `AGENTS.md`, `CLAUDE.md`, `llms.txt` and an Agent Skill in `skills/mockbox/`.
+
 ## 0.1.0 (2026-09-17)
 
 First release.

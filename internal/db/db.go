@@ -144,6 +144,72 @@ func (d *DB) Routes(readonly bool) []Route {
 	return out
 }
 
+// Collection names a collection and how many items it holds.
+type Collection struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
+}
+
+// Resources lists the servable collections and singular resources in file order.
+func (d *DB) Resources() (collections []Collection, singular []string) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	collections, singular = []Collection{}, []string{}
+	for _, k := range d.data.Keys() {
+		if !validName(k) {
+			continue
+		}
+		v, _ := d.data.Get(k)
+		switch t := v.(type) {
+		case []any:
+			collections = append(collections, Collection{k, len(t)})
+		case *jsonx.Object:
+			singular = append(singular, k)
+		}
+	}
+	return collections, singular
+}
+
+// Relation is a link between two collections, detected the same way the
+// server resolves /parent/:id/child, _embed and _expand.
+type Relation struct {
+	Parent     string `json:"parent"`
+	Child      string `json:"child"`
+	ForeignKey string `json:"foreign_key"`
+	// Expand is the name to pass as ?_expand= on the child to include the
+	// parent, or "" when _expand cannot reach this parent.
+	Expand string `json:"expand,omitempty"`
+}
+
+// Relations lists every detected parent/child pair in file order.
+func (d *DB) Relations() []Relation {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := []Relation{}
+	for _, parent := range d.data.Keys() {
+		if _, ok := d.collection(parent); !ok {
+			continue
+		}
+		for _, child := range d.childrenOf(parent) {
+			items, _ := d.collection(child)
+			rel := Relation{Parent: parent, Child: child, ForeignKey: d.foreignKeyIn(parent, items)}
+			if name, ok := strings.CutSuffix(rel.ForeignKey, "Id"); ok && name != "" {
+				// decorate uses the first existing candidate collection.
+				for _, cand := range pluralCandidates(name) {
+					if _, exists := d.collection(cand); exists {
+						if cand == parent {
+							rel.Expand = name
+						}
+						break
+					}
+				}
+			}
+			out = append(out, rel)
+		}
+	}
+	return out
+}
+
 // childrenOf lists collections whose items carry a foreign key to parent.
 func (d *DB) childrenOf(parent string) []string {
 	var out []string
